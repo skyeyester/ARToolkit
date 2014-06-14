@@ -1,0 +1,330 @@
+#ifdef _WIN32
+#include <windows.h>
+#endif
+#include <stdio.h>
+#include <stdlib.h>
+#ifndef __APPLE__
+#include <GL/gl.h>
+#include <GL/glut.h>
+#else
+#include <OpenGL/gl.h>
+#include <GLUT/glut.h>
+#endif
+#include <AR/gsub.h>
+#include <AR/video.h>
+#include <AR/param.h>
+#include <AR/ar.h>
+#include <string.h>
+#include <pthread.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+//#include <util.h>
+
+//
+// Camera configuration.
+//
+#ifdef _WIN32
+char			*vconf = "Data\\WDM_camera_flipV.xml";
+#else
+char			*vconf = "v4l2src device=/dev/video0 use-fixed-fps=false ! ffmpegcolorspace ! video/x-raw-rgb,bpp=24 ! identity name=artoolkit sync=true ! fakesink";
+#endif
+
+int             xsize, ysize;
+int             thresh = 100;
+int             count = 0;
+
+char           *cparam_name    = "Data/camera_para.dat";
+ARParam         cparam;
+
+char           *patt_name      = "Data/patt.hiro";
+int             patt_id;
+double          patt_width     = 80.0;
+double          patt_center[2] = {0.0, 0.0};
+double          patt_trans[3][4];
+
+int sock;
+
+static void   init(void);
+static void   cleanup(void);
+static void   keyEvent( unsigned char key, int x, int y);
+static void   mainLoop(void);
+static void   draw( void );
+void ARUint8toJpg(ARUint8* img, char* fname);
+
+void sendResult(char* message);
+
+int main(int argc, char **argv)
+{
+	glutInit(&argc, argv);
+	init();
+
+    //sock = atoi(argv[1]);
+
+    arVideoCapStart();
+    argMainLoop( NULL, keyEvent, mainLoop );
+	return (0);
+}
+
+static void   keyEvent( unsigned char key, int x, int y)
+{
+    /* quit if the ESC key is pressed */
+    if( key == 0x1b ) {
+        fprintf(stderr,"*** %f (frame/sec)\n", (double)count/arUtilTimer());
+        cleanup();
+        exit(0);
+    }
+}
+
+int readSizeFromStdin(){
+    char c;
+    char buff[1024];
+    int count=0;
+    int eol=0;
+    while((c = getchar()) != EOF){
+	buff[count] = c;
+        if(buff[count-1] == '\r' && buff[count] == '\n'){
+	    eol = 1;
+	    break;
+	}
+	count++;
+    }
+    if(eol){
+	buff[count] = '\0';
+	char s[5];
+	char* pch = strchr(buff, '=');
+	fflush(stdout);
+	printf("The Buffer is:");
+	printf("%s \n", buff);
+	if(pch != NULL){
+	    printf("size is: %s", strncpy(s,pch-4, 4));
+		printf("\n");
+	    char str[20];
+	    strcpy(str, pch+1); 
+	    return atoi(str);
+	}
+    }
+    return -1;
+    
+}
+
+int readFromStdin(char* buf, int size){
+    int count=0;
+    char c;
+    int s = size;
+    while((c = getchar()) ==EOF ||s){
+	//if((c = getchar()) == EOF || c<=0)
+	//    continue;
+        //if(c<0) continue;
+	//if(c[0] == 0) break;
+        //printf("%d ",c);
+        *(buf+count) = c;
+	count++;
+	s--;
+	//printf("size = %d c=%d\n", size, c);
+    }
+    *(buf+count) = '\0';
+    //printf("s = %s\n", buf);
+    return count;
+}
+
+/* main loop */
+static void mainLoop(void)
+{
+    ARUint8         *dataPtr;
+    ARMarkerInfo    *marker_info;
+    int             marker_num;
+    int             j, k;
+    
+    /* grab a vide frame */
+    /*
+    if( (dataPtr = (ARUint8 *)arVideoGetImage()) == NULL ) {
+        arUtilSleep(2);
+        return;
+    }
+    if( count == 0 ) arUtilTimerReset();
+    count++;
+    */
+    ///*
+	
+    while(1){
+    int size = readSizeFromStdin();
+    if(size<=0)
+	continue;
+    //printf("size = %d\n", size);
+    dataPtr = malloc(size);
+    int s = size;
+    while(s){
+    	int c = readFromStdin(dataPtr+size-s, s);
+    	//printf("get %d from stream\n", c);
+	s-=c;
+    }
+    break;
+    }
+    //*/
+    int n = strlen(dataPtr);
+    //printf("dataptr: %d\n", n);
+    int i;
+    //for(i=0; i<n; i++)
+    //	printf("%d ", *(dataPtr+i));
+    //puts("");
+//    ARUint8toJpg(dataPtr, "tmp.jpg");
+    argDrawMode2D();
+    argDispImage( dataPtr, 0,0 );
+    //puts("displayed");
+    //sleep(3); 
+
+	
+    /* detect the markers in the video frame */
+    
+	if( arDetectMarker(dataPtr, thresh, &marker_info, &marker_num) < 0 ) {
+        cleanup();
+        exit(0);
+    }
+	
+    arVideoCapNext();
+
+    /* check for object visibility */
+	
+	k = -1;
+    for( j = 0; j < marker_num; j++ ) {
+        if( patt_id == marker_info[j].id ) {
+            if( k == -1 ) k = j;
+            else if( marker_info[k].cf < marker_info[j].cf ) k = j;
+        }
+    }
+    if( k == -1 ) {
+        argSwapBuffers();
+        return;
+    }
+	
+    /* get the transformation between the marker and the real camera */
+    arGetTransMat(&marker_info[k], patt_center, patt_width, patt_trans);
+
+    draw();
+	argSwapBuffers();
+	//
+	printf("Before create thread\n");
+	pthread_t sendToPhone;
+	char message[] = "WoW \n\0";
+	pthread_create(&sendToPhone, NULL, (void *) &sendResult, (char *) &message);
+	pthread_join(sendToPhone, NULL);
+	printf("After create thread\n");
+}
+
+static void init( void )
+{
+    ARParam  wparam;
+	
+    /* open the video path */
+    if( arVideoOpen( vconf ) < 0 ) exit(0);
+    /* find the size of the window */
+    if( arVideoInqSize(&xsize, &ysize) < 0 ) exit(0);
+    fprintf(stderr,"Image size (x,y) = (%d,%d)\n", xsize, ysize);
+
+    /* set the initial camera parameters */
+    if( arParamLoad(cparam_name, 1, &wparam) < 0 ) {
+        fprintf(stderr,"Camera parameter load error !!\n");
+        exit(0);
+    }
+    xsize=240; ysize=320;
+    arParamChangeSize( &wparam, xsize, ysize, &cparam );
+    arInitCparam( &cparam );
+    fprintf(stderr,"*** Camera Parameter ***\n");
+    arParamDisp( &cparam );
+
+    if( (patt_id=arLoadPatt(patt_name)) < 0 ) {
+        fprintf(stderr,"pattern load error !!\n");
+        exit(0);
+    }
+
+    /* open the graphics window */
+    argInit( &cparam, 1.0, 0, 0, 0, 0 );
+}
+
+/* cleanup function called when program exits */
+static void cleanup(void)
+{
+    arVideoCapStop();
+    arVideoClose();
+    argCleanup();
+}
+
+static void draw( void )
+{
+    double    gl_para[16];
+    GLfloat   mat_ambient[]     = {0.0, 0.0, 1.0, 1.0};
+    GLfloat   mat_flash[]       = {0.0, 0.0, 1.0, 1.0};
+    GLfloat   mat_flash_shiny[] = {50.0};
+    GLfloat   light_position[]  = {100.0,-200.0,200.0,0.0};
+    GLfloat   ambi[]            = {0.1, 0.1, 0.1, 0.1};
+    GLfloat   lightZeroColor[]  = {0.9, 0.9, 0.9, 0.1};
+    
+    argDrawMode3D();
+    argDraw3dCamera( 0, 0 );
+    glClearDepth( 1.0 );
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    
+    /* load the camera transformation matrix */
+    argConvGlpara(patt_trans, gl_para);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadMatrixd( gl_para );
+
+    glEnable(GL_LIGHTING);
+    glEnable(GL_LIGHT0);
+    glLightfv(GL_LIGHT0, GL_POSITION, light_position);
+    glLightfv(GL_LIGHT0, GL_AMBIENT, ambi);
+    glLightfv(GL_LIGHT0, GL_DIFFUSE, lightZeroColor);
+    glMaterialfv(GL_FRONT, GL_SPECULAR, mat_flash);
+    glMaterialfv(GL_FRONT, GL_SHININESS, mat_flash_shiny);	
+    glMaterialfv(GL_FRONT, GL_AMBIENT, mat_ambient);
+    glMatrixMode(GL_MODELVIEW);
+    glTranslatef( 0.0, 0.0, 25.0 );
+    glutSolidCube(50.0);
+    glDisable( GL_LIGHTING );
+
+    glDisable( GL_DEPTH_TEST );
+}
+
+void ARUint8toJpg(ARUint8* img, char* fname){
+    FILE *dst = fopen(fname, "wb");
+    int c=0,x;
+    char buf[9];
+
+    int len = strlen(img);
+    for(x=0; x<len; x++){
+	if(c<=8){
+	    buf[c] = img[x];
+	}
+	else{
+	    fwrite(&buf, sizeof(buf), 1, dst);
+	    c=0;
+	}
+        c++;
+    }
+}
+
+void sendResult(char* msg){
+	int sockfd,n;
+	struct sockaddr_in server_address,clint_address;
+	printf("Want to Write:%s\n", msg);
+	//
+	sockfd = socket(AF_INET, SOCK_STREAM, 0);
+	if(sockfd <0){
+	  printf("Error in open socket\n");
+	  //return NULL;
+	  }
+	bzero(&server_address, sizeof(server_address));
+	server_address.sin_family = AF_INET;
+	server_address.sin_addr.s_addr = inet_addr("192.168.11.3");
+	server_address.sin_port = htons(8888);
+	if(connect(sockfd, (struct sockaddr *) &server_address, sizeof(server_address)) <0){
+	  printf("Error in connecting\n");
+	  //return NULL;
+	  }
+	
+	sendto(sockfd, msg, strlen(msg), 0,(struct sockaddr *) &server_address, sizeof(server_address));
+	close(sockfd);  
+	//return NULL;
+}

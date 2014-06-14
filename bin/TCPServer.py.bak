@@ -1,0 +1,92 @@
+import socket
+import threading
+import SocketServer
+import time
+import os
+from PNG2RAW import PNG2RAW
+import subprocess
+
+class ThreadedTCPRequestHandler(SocketServer.BaseRequestHandler):
+
+    def handle(self):
+		data = ''
+		while 1:
+			c = self.request.recv(1)
+			if c == '\n' or c == '':
+				break
+			else:
+				data += c
+
+		if len(data.split('=')) is 2:
+			size = int(data.split('=').pop())
+		else:
+			return
+
+		#print size
+		s = size
+		data = ''
+		while size:
+			c = self.request.recv(1)
+			if c == '':
+				continue
+			data += c
+			size -= 1
+		
+		#print len(data)
+		convertor = PNG2RAW(data)
+		outbuf = convertor.convert()
+		#print convertor.getSize()
+		#print convertor.getLen()
+		os.write(self.server.pin, 'size=%d\r\n %s' % (convertor.getLen(), outbuf))
+		#os.write(self.server.pin, outbuf)
+
+		"""			
+		print self.server.test
+		print self.request.fileno()
+		from subprocess import call
+		call(['/home/ctchang/src/ARToolKit/bin/simpleTest'], stdin=self.request.fileno())
+		data = self.request.recv(1024)
+        cur_thread = threading.current_thread()
+        response = "{}: {}".format(cur_thread.name, data)
+        self.request.sendall(response)
+		time.sleep(5)
+		self.request.sendall('over'+cur_thread.name)
+		"""
+
+
+class ThreadedTCPServer(SocketServer.ThreadingMixIn, SocketServer.TCPServer):
+	pass
+
+if __name__ == "__main__":
+    # Port 0 means to select an arbitrary unused port
+	HOST, PORT = "192.168.11.3", 5006
+	#HOST, PORT = "localhost", 5005 
+    #HOST, PORT = "192.168.1.121", 5006
+	
+	
+	server = ThreadedTCPServer((HOST, PORT), ThreadedTCPRequestHandler)
+    
+	ip, port = server.server_address
+	print ip
+	print port
+	
+	pipein, pipeout = os.pipe()
+	server.pin = pipeout
+	subprocess.Popen(['/home/hscc/MyARProject/ARToolKit/bin/simpleTest'], stdin=pipein)
+
+	# Start a thread with the server -- that thread will then start one
+    # more thread for each request
+	server_thread = threading.Thread(target=server.serve_forever)
+    # Exit the server thread when the main thread terminates
+
+	server_thread.daemon = True
+	server_thread.start()
+	print "Server loop running in thread:", server_thread.name
+
+	time.sleep(10000)
+	#client(ip, port, "Hello World 1")
+    #client(ip, port, "Hello World 2")
+    #client(ip, port, "Hello World 3")
+
+#    server.shutdown()
+

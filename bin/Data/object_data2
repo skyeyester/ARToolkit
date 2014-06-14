@@ -1,0 +1,38 @@
+#the number of patterns to be recognized
+6
+
+#pattern 1
+Hiro
+Data/patt.hiro
+80.0
+0.0 0.0
+
+#pattern 2
+Human
+Data/patt.kanji
+80.0
+0.0 0.0
+
+#pattern 3
+MarCloud
+Data/patt.mar
+80.0
+0.0 0.0
+
+#pattern 4
+MonaLisa
+Data/patt.monalisa
+80.0
+0.0 0.0
+
+#pattern 5
+Lenna
+Data/patt.lenna
+80.0
+0.0 0.0
+
+#pattern 6
+IwoJima
+Data/patt.american
+80.0
+0.0 0.0
